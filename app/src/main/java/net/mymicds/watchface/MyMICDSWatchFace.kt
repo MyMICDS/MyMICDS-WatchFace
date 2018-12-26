@@ -4,11 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Rect
-import android.graphics.Typeface
+import android.graphics.*
 import android.os.Bundle
 import android.os.Handler
 import android.os.Message
@@ -16,9 +12,14 @@ import android.support.v4.content.ContextCompat
 import android.support.wearable.watchface.CanvasWatchFaceService
 import android.support.wearable.watchface.WatchFaceService
 import android.support.wearable.watchface.WatchFaceStyle
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.WindowInsets
-
+import com.android.volley.Request
+import com.android.volley.RequestQueue
+import com.android.volley.Response
+import com.android.volley.toolbox.JsonObjectRequest
+import com.android.volley.toolbox.Volley
 
 import java.lang.ref.WeakReference
 import java.util.Calendar
@@ -51,6 +52,21 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
          * Handler message id for updating the time periodically in interactive mode.
          */
         private const val MSG_UPDATE_TIME = 0
+
+        /**
+         * Stroke width for outer rings.
+         */
+        private const val RING_STROKE_WIDTH = 8f
+
+        /**
+         * API route to make request to.
+         */
+        private const val API_ROUTE = "https://api.mymicds.net/schedule/get"
+
+        /**
+         * Time interval to make API requests at, in milliseconds.
+         */
+        private const val API_INTERVAL = 1 /* hour */ * 60 * 60 * 1000L
     }
 
     override fun onCreateEngine(): Engine {
@@ -74,6 +90,9 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         private lateinit var mCalendar: Calendar
 
+        private lateinit var mRequestQueue: RequestQueue
+        private val mTimedRequestHandler = Handler()
+
         private var mRegisteredTimeZoneReceiver = false
 
         private var mXOffset: Float = 0F
@@ -81,6 +100,13 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         private lateinit var mBackgroundPaint: Paint
         private lateinit var mTextPaint: Paint
+        private lateinit var mRingPaint: Paint
+
+        /**
+         * The arc angles for each of the outer progress rings, in degrees.
+         */
+        private var mInnerRingArcAngle: Float = 0f
+        private var mOuterRingArcAngle: Float = 0f
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -109,6 +135,16 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             mCalendar = Calendar.getInstance()
 
+            mRequestQueue = Volley.newRequestQueue(this@MyMICDSWatchFace)
+
+            val addRequestRunnable = object: Runnable {
+                override fun run() {
+                    makeMyMICDSRequest()
+                    mTimedRequestHandler.postDelayed(this, API_INTERVAL)
+                }
+            }
+            mTimedRequestHandler.post(addRequestRunnable)
+
             val resources = this@MyMICDSWatchFace.resources
             mYOffset = resources.getDimension(R.dimen.digital_y_offset)
 
@@ -122,6 +158,16 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 typeface = NORMAL_TYPEFACE
                 isAntiAlias = true
                 color = ContextCompat.getColor(applicationContext, R.color.digital_text)
+                textAlign = Paint.Align.CENTER
+            }
+
+            // Initializes outer ring paint.
+            mRingPaint = Paint().apply {
+                isAntiAlias = true
+                color = ContextCompat.getColor(applicationContext, R.color.outer_rings)
+                strokeWidth = RING_STROKE_WIDTH
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
             }
         }
 
@@ -158,7 +204,6 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             updateTimer()
         }
 
-
         override fun onDraw(canvas: Canvas, bounds: Rect) {
             // Draw the background.
             if (mAmbient) {
@@ -169,21 +214,35 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 )
             }
 
-            // Draw H:MM in ambient mode or H:MM:SS in interactive mode.
+            val centerX = bounds.exactCenterX()
+            val centerY = bounds.exactCenterY()
+
+            // Draw time.
+
             val now = System.currentTimeMillis()
             mCalendar.timeInMillis = now
 
-            val text = if (mAmbient)
-                String.format(
-                    "%d:%02d", mCalendar.get(Calendar.HOUR),
-                    mCalendar.get(Calendar.MINUTE)
-                )
-            else
-                String.format(
-                    "%d:%02d:%02d", mCalendar.get(Calendar.HOUR),
-                    mCalendar.get(Calendar.MINUTE), mCalendar.get(Calendar.SECOND)
-                )
-            canvas.drawText(text, mXOffset, mYOffset, mTextPaint)
+            val text = String.format("%d:%02d", mCalendar.get(Calendar.HOUR), mCalendar.get(Calendar.MINUTE))
+            val centerTextYOffset = Rect().also { mTextPaint.getTextBounds("1", 0, 1, it) }.exactCenterY()
+
+            canvas.drawText(text, centerX, centerY - centerTextYOffset, mTextPaint)
+
+            // Draw rings.
+
+            canvas.drawArc(scaleRect(bounds, 0.90f), -90f, mInnerRingArcAngle, false, mRingPaint)
+            canvas.drawArc(scaleRect(bounds, 0.95f), -90f, mOuterRingArcAngle, false, mRingPaint)
+        }
+
+        private fun scaleRect(rect: Rect, scaleFactor: Float): RectF {
+            val deltaX = rect.width() * (1 - scaleFactor)
+            val deltaY = rect.height() * (1 - scaleFactor)
+
+            return RectF(
+                rect.left + deltaX,
+                rect.top + deltaY,
+                rect.right - deltaX,
+                rect.bottom - deltaY
+            )
         }
 
         override fun onVisibilityChanged(visible: Boolean) {
@@ -273,6 +332,22 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 val delayMs = INTERACTIVE_UPDATE_RATE_MS - timeMs % INTERACTIVE_UPDATE_RATE_MS
                 mUpdateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs)
             }
+        }
+
+        private fun makeMyMICDSRequest() {
+            val jsonRequest = JsonObjectRequest(
+                Request.Method.POST,
+                API_ROUTE,
+                null,
+                Response.Listener { response ->
+                    TODO("Handle schedule response, figure out percentage calculation")
+                },
+                Response.ErrorListener { error ->
+                    TODO("Figure out if it needs to do anything special on error")
+                }
+            )
+
+            mRequestQueue.add(jsonRequest)
         }
     }
 }
