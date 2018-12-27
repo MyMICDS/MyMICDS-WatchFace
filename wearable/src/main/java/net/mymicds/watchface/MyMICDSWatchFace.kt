@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.*
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Message
@@ -20,10 +21,10 @@ import com.android.volley.RequestQueue
 import com.android.volley.Response
 import com.android.volley.toolbox.JsonObjectRequest
 import com.android.volley.toolbox.Volley
-
+import com.google.android.gms.wearable.*
+import org.json.JSONObject
 import java.lang.ref.WeakReference
-import java.util.Calendar
-import java.util.TimeZone
+import java.util.*
 
 /**
  * Digital watch face with seconds. In ambient mode, the seconds aren't displayed. On devices with
@@ -40,6 +41,8 @@ import java.util.TimeZone
 class MyMICDSWatchFace : CanvasWatchFaceService() {
 
     companion object {
+        private const val TAG = "MyMICDSWatchFace"
+
         private val NORMAL_TYPEFACE = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
 
         /**
@@ -67,6 +70,11 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
          * Time interval to make API requests at, in milliseconds.
          */
         private const val API_INTERVAL = 1 /* hour */ * 60 * 60 * 1000L
+
+        /**
+         * Data map key that holds the user's JWT.
+         */
+        private const val JWT_KEY = "net.mymicds.watchface.jwt"
     }
 
     override fun onCreateEngine(): Engine {
@@ -86,12 +94,16 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         }
     }
 
-    inner class Engine : CanvasWatchFaceService.Engine() {
+    inner class Engine : CanvasWatchFaceService.Engine(), DataClient.OnDataChangedListener {
 
         private lateinit var mCalendar: Calendar
 
+        private lateinit var mDataClient: DataClient
+
         private lateinit var mRequestQueue: RequestQueue
         private val mTimedRequestHandler = Handler()
+
+        private var mRequestJWT: String? = null
 
         private var mRegisteredTimeZoneReceiver = false
 
@@ -133,14 +145,21 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                     .build()
             )
 
+
+            mDataClient = Wearable.getDataClient(this@MyMICDSWatchFace).apply {
+                addListener(this@Engine)
+            }
+
             mCalendar = Calendar.getInstance()
 
             mRequestQueue = Volley.newRequestQueue(this@MyMICDSWatchFace)
 
             val addRequestRunnable = object: Runnable {
                 override fun run() {
-                    makeMyMICDSRequest()
-                    mTimedRequestHandler.postDelayed(this, API_INTERVAL)
+                    if (mRequestJWT != null) {
+                        makeMyMICDSRequest()
+                        mTimedRequestHandler.postDelayed(this, API_INTERVAL)
+                    }
                 }
             }
             mTimedRequestHandler.post(addRequestRunnable)
@@ -172,6 +191,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         }
 
         override fun onDestroy() {
+            mDataClient.removeListener(this)
             mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME)
             super.onDestroy()
         }
@@ -335,19 +355,40 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         }
 
         private fun makeMyMICDSRequest() {
-            val jsonRequest = JsonObjectRequest(
+            Log.d(TAG, "Making request")
+
+            val jsonRequest = object: JsonObjectRequest(
                 Request.Method.POST,
                 API_ROUTE,
-                null,
+                JSONObject() // TODO: Remove after testing
+                    .put("year", 2018)
+                    .put("month", 12)
+                    .put("day", 14),
                 Response.Listener { response ->
-                    TODO("Handle schedule response, figure out percentage calculation")
+                    Log.i(TAG, "Response: $response")
+                    // TODO: Handle schedule response, figure out percentage calculation
                 },
                 Response.ErrorListener { error ->
-                    TODO("Figure out if it needs to do anything special on error")
+                    Log.e(TAG, "Error: ${error.message}")
+                    // TODO: Figure out if it needs to do anything special on error
                 }
-            )
+            ) {
+                override fun getHeaders() = mutableMapOf("Authorization" to "Bearer $mRequestJWT")
+            }
 
             mRequestQueue.add(jsonRequest)
+        }
+
+        override fun onDataChanged(dataEvents: DataEventBuffer) {
+            Log.d(TAG, "Data change listener called")
+            dataEvents.forEach { event ->
+                if (event.type != DataEvent.TYPE_CHANGED) return
+
+                val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
+                mRequestJWT = dataMap.getString(JWT_KEY)
+                Log.i(TAG, "JWT: $mRequestJWT")
+                makeMyMICDSRequest()
+            }
         }
     }
 }

@@ -1,51 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          xmlns:tools="http://schemas.android.com/tools" package="net.mymicds.watchface">
+    xmlns:tools="http://schemas.android.com/tools"
+    package="net.mymicds.watchface">
 
-    <uses-feature android:name="android.hardware.type.watch"/>
-
-    <!-- Required to act as a custom watch face. -->
-    <uses-permission
-            android:name="android.permission.WAKE_LOCK"/> <!-- Required for complications to receive complication data and open the provider chooser. -->
-    <uses-permission android:name="com.google.android.wearable.permission.RECEIVE_COMPLICATION_DATA"/>
-
-    <!--Required for MyMICDS API requests.-->
+    <!-- Required for MyMICDS API requests. -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <application
             android:allowBackup="true"
             android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_round"
             android:supportsRtl="true"
-            android:theme="@android:style/Theme.DeviceDefault" tools:ignore="AllowBackup,GoogleAppIndexingWarning">
-        <meta-data
-                android:name="com.google.android.wearable.standalone"
-                android:value="true"/>
-
-        <service
-                android:name=".MyMICDSWatchFace"
-                android:label="@string/my_digital_name"
-                android:permission="android.permission.BIND_WALLPAPER">
-            <meta-data
-                    android:name="android.service.wallpaper"
-                    android:resource="@xml/watch_face"/>
-            <meta-data
-                    android:name="com.google.android.wearable.watchface.preview"
-                    android:resource="@drawable/preview_digital"/>
-            <meta-data
-                    android:name="com.google.android.wearable.watchface.preview_circular"
-                    android:resource="@drawable/preview_digital_circular"/>
-
+            android:theme="@style/AppTheme"
+        tools:ignore="AllowBackup,GoogleAppIndexingWarning">
+        <activity android:name="net.mymicds.watchface.MainActivity">
             <intent-filter>
-                <action android:name="android.service.wallpaper.WallpaperService"/>
+                <action android:name="android.intent.action.MAIN"/>
 
-                <category android:name="com.google.android.wearable.watchface.category.WATCH_FACE"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+
+                <action android:name="net.mymicds.watchface.CONFIG_DIGITAL"/>
+                <category android:name="com.google.android.wearable.watchface.category.COMPANION_CONFIGURATION"/>
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-        </service>
-
-        <meta-data
-                android:name="com.google.android.gms.version"
-                android:value="@integer/google_play_services_version"/>
+        </activity>
     </application>
 
 </manifest>

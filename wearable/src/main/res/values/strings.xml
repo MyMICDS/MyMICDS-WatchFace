@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">MyMICDS Watch Face</string>
+    <string name="message">Watch face tapped</string>
+    <string name="my_digital_name">MyMICDS</string>
+</resources>

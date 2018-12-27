@@ -1,5 +1,7 @@
 <resources>
-    <string name="app_name">MyMICDS Watch Face</string>
-    <string name="message">Watch face tapped</string>
-    <string name="my_digital_name">MyMICDS</string>
+    <string name="app_name">MyMICDS Watch Face Config</string>
+    <string name="login_button">Login</string>
+    <string name="login_button_process">Logging in…</string>
+    <string name="username_text_field">Username</string>
+    <string name="password_text_field">Password</string>
 </resources>
