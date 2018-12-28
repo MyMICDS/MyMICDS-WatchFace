@@ -5,11 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.*
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Message
 import android.support.v4.content.ContextCompat
+import android.support.v4.math.MathUtils
 import android.support.wearable.watchface.CanvasWatchFaceService
 import android.support.wearable.watchface.WatchFaceService
 import android.support.wearable.watchface.WatchFaceStyle
@@ -24,7 +24,9 @@ import com.android.volley.toolbox.Volley
 import com.google.android.gms.wearable.*
 import org.json.JSONObject
 import java.lang.ref.WeakReference
-import java.util.*
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 /**
  * Digital watch face with seconds. In ambient mode, the seconds aren't displayed. On devices with
@@ -62,6 +64,16 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         private const val RING_STROKE_WIDTH = 8f
 
         /**
+         * Rectangle scale factor for the outer school ring.
+         */
+        private const val SCHOOL_RING_SCALE = 0.975f
+
+        /**
+         * Rectangle scale factor for the inner class ring.
+         */
+        private const val CLASS_RING_SCALE = 0.935f
+
+        /**
          * API route to make request to.
          */
         private const val API_ROUTE = "https://api.mymicds.net/schedule/get"
@@ -96,7 +108,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
     inner class Engine : CanvasWatchFaceService.Engine(), DataClient.OnDataChangedListener {
 
-        private lateinit var mCalendar: Calendar
+        private lateinit var mNow: LocalTime
 
         private lateinit var mDataClient: DataClient
 
@@ -105,20 +117,18 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         private var mRequestJWT: String? = null
 
+        private var mScheduleClasses = emptyList<ScheduleClass>()
+        private var mSchoolEnd = LocalTime.of(15, 15)
+
         private var mRegisteredTimeZoneReceiver = false
 
         private var mXOffset: Float = 0F
         private var mYOffset: Float = 0F
 
         private lateinit var mBackgroundPaint: Paint
-        private lateinit var mTextPaint: Paint
+        private lateinit var mTimePaint: Paint
+        private lateinit var mSmallTextPaint: Paint
         private lateinit var mRingPaint: Paint
-
-        /**
-         * The arc angles for each of the outer progress rings, in degrees.
-         */
-        private var mInnerRingArcAngle: Float = 0f
-        private var mOuterRingArcAngle: Float = 0f
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -132,7 +142,6 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         private val mTimeZoneReceiver: BroadcastReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                mCalendar.timeZone = TimeZone.getDefault()
                 invalidate()
             }
         }
@@ -142,15 +151,12 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             setWatchFaceStyle(
                 WatchFaceStyle.Builder(this@MyMICDSWatchFace)
+                    .setHideStatusBar(true)
                     .build()
             )
 
-
-            mDataClient = Wearable.getDataClient(this@MyMICDSWatchFace).apply {
-                addListener(this@Engine)
-            }
-
-            mCalendar = Calendar.getInstance()
+            mDataClient = Wearable.getDataClient(this@MyMICDSWatchFace)
+            mDataClient.addListener(this)
 
             mRequestQueue = Volley.newRequestQueue(this@MyMICDSWatchFace)
 
@@ -172,18 +178,24 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 color = ContextCompat.getColor(applicationContext, R.color.background)
             }
 
-            // Initializes Watch Face.
-            mTextPaint = Paint().apply {
+            // Initializes time paint.
+            mTimePaint = Paint().apply {
                 typeface = NORMAL_TYPEFACE
                 isAntiAlias = true
                 color = ContextCompat.getColor(applicationContext, R.color.digital_text)
                 textAlign = Paint.Align.CENTER
+                textSize = resources.getDimension(R.dimen.digital_text_size)
+            }
+
+            // Initializes percent text paint.
+            mSmallTextPaint = Paint(mTimePaint).apply {
+                textSize = resources.getDimension(R.dimen.digital_text_size_small)
             }
 
             // Initializes outer ring paint.
             mRingPaint = Paint().apply {
                 isAntiAlias = true
-                color = ContextCompat.getColor(applicationContext, R.color.outer_rings)
+                color = ContextCompat.getColor(applicationContext, R.color.school_ring)
                 strokeWidth = RING_STROKE_WIDTH
                 style = Paint.Style.STROKE
                 strokeCap = Paint.Cap.ROUND
@@ -215,8 +227,15 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             super.onAmbientModeChanged(inAmbientMode)
             mAmbient = inAmbientMode
 
+            if (inAmbientMode) {
+                mRingPaint.color = Color.LTGRAY
+            } else {
+                mRingPaint.color = ContextCompat.getColor(applicationContext, R.color.school_ring)
+            }
+
             if (mLowBitAmbient) {
-                mTextPaint.isAntiAlias = !inAmbientMode
+                mTimePaint.isAntiAlias = !inAmbientMode
+                mRingPaint.isAntiAlias = !inAmbientMode
             }
 
             // Whether the timer should be running depends on whether we're visible (as well as
@@ -239,20 +258,81 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             // Draw time.
 
-            val now = System.currentTimeMillis()
-            mCalendar.timeInMillis = now
+            mNow = LocalTime.now()
 
-            val text = String.format("%d:%02d", mCalendar.get(Calendar.HOUR), mCalendar.get(Calendar.MINUTE))
-            val centerTextYOffset = Rect().also { mTextPaint.getTextBounds("1", 0, 1, it) }.exactCenterY()
+            val timeFormat = DateTimeFormatter.ofPattern("h:mm")
 
-            canvas.drawText(text, centerX, centerY - centerTextYOffset, mTextPaint)
+            val timeText = timeFormat.format(mNow)
+            val centerTextBounds = Rect().also { mTimePaint.getTextBounds(timeText, 0, 1, it) }
+            val centerTextYOffset = centerTextBounds.exactCenterY()
 
-            // Draw rings.
+            canvas.drawText(timeText, centerX, centerY - centerTextYOffset, mTimePaint)
 
-            canvas.drawArc(scaleRect(bounds, 0.90f), -90f, mInnerRingArcAngle, false, mRingPaint)
-            canvas.drawArc(scaleRect(bounds, 0.95f), -90f, mOuterRingArcAngle, false, mRingPaint)
+            // Draw school ring.
+
+            var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: LocalTime.of(8, 0), mSchoolEnd)
+            canvas.drawArc(scaleRect(bounds, SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
+
+            // Draw percent text.
+
+            /**
+             * Combines two strings together with a colon and truncates the first string if the overall text is too large.
+             */
+            fun combineAndTruncate(text1: String, text2: String): String {
+                val text = "$text1: $text2"
+                val boundingBox = Rect().also { mSmallTextPaint.getTextBounds(text, 0, text.length, it) }
+
+                Log.d(TAG, "Width ratio for \"$text1\": ${boundingBox.width().toDouble() / bounds.width()}")
+
+                return if (boundingBox.width() >= 0.7 * bounds.width()) {
+                    "${text1.substring(0..8)}: $text2"
+                } else {
+                    text
+                }
+            }
+
+            val percentTextYOffset = Rect().also { mSmallTextPaint.getTextBounds("1", 0, 1, it) }.exactCenterY() * 2
+
+            var percentClassName = "School"
+
+            // Do stuff that requires schedule classes to be populated
+            if (!mScheduleClasses.isEmpty()) {
+                val currentClass = mScheduleClasses.find { mNow in it.start..it.end } ?: return
+                percent = getPercent(currentClass.start, currentClass.end)
+                val classPaint = Paint(mRingPaint).apply { color = if (mAmbient) Color.LTGRAY else currentClass.color }
+
+                // Draw class ring, set class name.
+
+                canvas.drawArc(scaleRect(bounds, CLASS_RING_SCALE), -90f, 360 * percent, false, classPaint)
+                percentClassName = currentClass.name
+
+                // Draw next class text.
+
+                val nextClass = mScheduleClasses.firstOrNull { mNow < it.start && it.name != "Break" }
+                if (nextClass != null && !mAmbient) {
+                    canvas.drawText(
+                        combineAndTruncate(nextClass.name, timeFormat.format(nextClass.start)),
+                        centerX,
+                        centerY + centerTextBounds.height() - percentTextYOffset,
+                        mSmallTextPaint
+                    )
+                }
+            }
+
+            // Draw class percent text.
+
+            if (!mAmbient)
+                canvas.drawText(
+                    combineAndTruncate(percentClassName, "${(percent * 100).roundToInt()}%"),
+                    centerX,
+                    centerY - centerTextBounds.height(),
+                    mSmallTextPaint
+                )
         }
 
+        /**
+         * Scales a rectangle evenly on all sides.
+         */
         private fun scaleRect(rect: Rect, scaleFactor: Float): RectF {
             val deltaX = rect.width() * (1 - scaleFactor)
             val deltaY = rect.height() * (1 - scaleFactor)
@@ -265,14 +345,22 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             )
         }
 
+        /**
+         * Gets percentage of time completed between two LocalTimes relative to the current time.
+         */
+        private fun getPercent(start: LocalTime, end: LocalTime): Float {
+            val numerator = mNow.toSecondOfDay() - start.toSecondOfDay()
+            val denominator = end.toSecondOfDay() - start.toSecondOfDay()
+
+            return MathUtils.clamp(numerator.toFloat() / denominator, 0f, 1f)
+        }
+
         override fun onVisibilityChanged(visible: Boolean) {
             super.onVisibilityChanged(visible)
 
             if (visible) {
                 registerReceiver()
 
-                // Update time zone in case it changed while we weren't visible.
-                mCalendar.timeZone = TimeZone.getDefault()
                 invalidate()
             } else {
                 unregisterReceiver()
@@ -320,7 +408,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                     R.dimen.digital_text_size
             )
 
-            mTextPaint.textSize = textSize
+            mTimePaint.textSize = textSize
         }
 
         /**
@@ -366,11 +454,34 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                     .put("day", 14),
                 Response.Listener { response ->
                     Log.i(TAG, "Response: $response")
-                    // TODO: Handle schedule response, figure out percentage calculation
+
+                    val classesArray = response.getJSONObject("schedule").getJSONArray("classes")
+                    val scheduleClasses = mutableListOf<ScheduleClass>()
+
+                    for (i in 0 until classesArray.length() - 1) {
+                        val class1 = ScheduleClass.fromJSON(classesArray.getJSONObject(i))
+                        val class2 = ScheduleClass.fromJSON(classesArray.getJSONObject(i + 1))
+
+                        scheduleClasses.add(class1)
+                        // If the classes aren't back to back, insert a break
+                        if (class1.end != class2.start) {
+                            scheduleClasses.add(ScheduleClass(
+                                "Break",
+                                class1.end,
+                                class2.start,
+                                Color.GRAY
+                            ))
+                        }
+                        scheduleClasses.add(class2)
+                    }
+
+                    mScheduleClasses = scheduleClasses.toList()
+                    Log.i(TAG, "Classes: $mScheduleClasses")
+
+                    mSchoolEnd = minOf(mScheduleClasses.last().end, LocalTime.of(15, 15))
                 },
                 Response.ErrorListener { error ->
                     Log.e(TAG, "Error: ${error.message}")
-                    // TODO: Figure out if it needs to do anything special on error
                 }
             ) {
                 override fun getHeaders() = mutableMapOf("Authorization" to "Bearer $mRequestJWT")
@@ -381,7 +492,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         override fun onDataChanged(dataEvents: DataEventBuffer) {
             Log.d(TAG, "Data change listener called")
-            dataEvents.forEach { event ->
+            for (event in dataEvents) {
                 if (event.type != DataEvent.TYPE_CHANGED) return
 
                 val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
