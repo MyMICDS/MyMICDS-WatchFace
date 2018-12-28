@@ -285,7 +285,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 Log.d(TAG, "Width ratio for \"$text1\": ${boundingBox.width().toDouble() / bounds.width()}")
 
                 return if (boundingBox.width() >= 0.7 * bounds.width()) {
-                    "${text1.substring(0..8)}: $text2"
+                    "${text1.substring(0..8)}…: $text2"
                 } else {
                     text
                 }
