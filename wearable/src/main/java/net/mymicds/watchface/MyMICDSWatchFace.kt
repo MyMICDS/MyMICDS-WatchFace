@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.*
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Message
@@ -157,6 +158,24 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             mDataClient = Wearable.getDataClient(this@MyMICDSWatchFace)
             mDataClient.addListener(this)
+
+            // Get JWT that's already been stored
+            Wearable.getNodeClient(this@MyMICDSWatchFace).connectedNodes.addOnSuccessListener { nodes ->
+                // I'm pretty sure that the first node is guaranteed to be the phone?
+                // If it's empty, which I guess it might be sometimes, then we can just skip this nonsense
+                val phoneNode = nodes.firstOrNull() ?: return@addOnSuccessListener
+
+                Log.d(TAG, "Connected nodes: ${nodes.joinToString { it.id }}")
+                val uri = Uri.Builder()
+                    .scheme("wear")
+                    .path("/jwt")
+                    .authority(phoneNode.id)
+                    .build()
+
+                Log.d(TAG, "Constructed URI: $uri")
+
+                mDataClient.getDataItem(uri).addOnSuccessListener(::dataItemCallback)
+            }
 
             mRequestQueue = Volley.newRequestQueue(this@MyMICDSWatchFace)
 
@@ -495,11 +514,15 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             for (event in dataEvents) {
                 if (event.type != DataEvent.TYPE_CHANGED) return
 
-                val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
-                mRequestJWT = dataMap.getString(JWT_KEY)
-                Log.i(TAG, "JWT: $mRequestJWT")
-                makeMyMICDSRequest()
+                dataItemCallback(event.dataItem)
             }
+        }
+
+        private fun dataItemCallback(dataItem: DataItem) {
+            val dataMap = DataMapItem.fromDataItem(dataItem).dataMap
+            mRequestJWT = dataMap.getString(JWT_KEY)
+            Log.i(TAG, "JWT: $mRequestJWT")
+            makeMyMICDSRequest()
         }
     }
 }
