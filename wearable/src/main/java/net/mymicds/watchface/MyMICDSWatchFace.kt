@@ -88,6 +88,11 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
          * Data map key that holds the user's JWT.
          */
         private const val JWT_KEY = "net.mymicds.watchface.jwt"
+
+        /**
+         * Capability that defines where the JWT is written.
+         */
+        private const val JWT_CAPABILITY = "retrieve_jwt"
     }
 
     override fun onCreateEngine(): Engine {
@@ -160,22 +165,22 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             mDataClient.addListener(this)
 
             // Get JWT that's already been stored
-            Wearable.getNodeClient(this@MyMICDSWatchFace).connectedNodes.addOnSuccessListener { nodes ->
-                // I'm pretty sure that the first node is guaranteed to be the phone?
-                // If it's empty, which I guess it might be sometimes, then we can just skip this nonsense
-                val phoneNode = nodes.firstOrNull() ?: return@addOnSuccessListener
+            Wearable.getCapabilityClient(this@MyMICDSWatchFace)
+                .getCapability(JWT_CAPABILITY, CapabilityClient.FILTER_ALL)
+                .addOnSuccessListener { info ->
+                    // If there's no node that can retrieve the JWT, then we might as well just return
+                    val phoneNode = info.nodes.firstOrNull() ?: return@addOnSuccessListener
 
-                Log.d(TAG, "Connected nodes: ${nodes.joinToString { it.id }}")
-                val uri = Uri.Builder()
-                    .scheme("wear")
-                    .path("/jwt")
-                    .authority(phoneNode.id)
-                    .build()
+                    val uri = Uri.Builder()
+                        .scheme("wear")
+                        .path("/jwt")
+                        .authority(phoneNode.id)
+                        .build()
 
-                Log.d(TAG, "Constructed URI: $uri")
+                    Log.d(TAG, "Constructed URI: $uri")
 
-                mDataClient.getDataItem(uri).addOnSuccessListener(::dataItemCallback)
-            }
+                    mDataClient.getDataItem(uri).addOnSuccessListener(::dataItemCallback)
+                }
 
             mRequestQueue = Volley.newRequestQueue(this@MyMICDSWatchFace)
 
