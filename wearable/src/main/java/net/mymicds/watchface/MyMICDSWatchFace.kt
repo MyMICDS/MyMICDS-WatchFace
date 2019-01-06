@@ -123,6 +123,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         private var mRequestJWT: String? = null
 
+        private var mSchoolInSession = true
         private var mScheduleClasses = emptyList<ScheduleClass>()
         private var mSchoolEnd = LocalTime.of(15, 15)
 
@@ -295,7 +296,10 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             // Draw school ring.
 
             var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: LocalTime.of(8, 0), mSchoolEnd)
-            canvas.drawArc(scaleRect(bounds, SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
+
+            if (mSchoolInSession) {
+                canvas.drawArc(scaleRect(bounds, SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
+            }
 
             // Draw percent text.
 
@@ -347,7 +351,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             if (!mAmbient)
                 canvas.drawText(
-                    combineAndTruncate(percentClassName, "${(percent * 100).roundToInt()}%"),
+                    if (mSchoolInSession) combineAndTruncate(percentClassName, "${(percent * 100).roundToInt()}%") else "No School",
                     centerX,
                     centerY - centerTextBounds.height(),
                     mSmallTextPaint
@@ -472,14 +476,17 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             val jsonRequest = object: JsonObjectRequest(
                 Request.Method.POST,
                 API_ROUTE,
-                JSONObject() // TODO: Remove after testing
-                    .put("year", 2018)
-                    .put("month", 12)
-                    .put("day", 14),
+                null,
                 Response.Listener { response ->
                     Log.i(TAG, "Response: $response")
 
-                    val classesArray = response.getJSONObject("schedule").getJSONArray("classes")
+                    val schedule = response.getJSONObject("schedule")
+
+                    mSchoolInSession = schedule.get("day") != JSONObject.NULL
+
+                    Log.d(TAG, "In session: $mSchoolInSession")
+
+                    val classesArray = schedule.getJSONArray("classes")
                     val scheduleClasses = mutableListOf<ScheduleClass>()
 
                     for (i in 0 until classesArray.length() - 1) {
@@ -502,7 +509,11 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                     mScheduleClasses = scheduleClasses.toList()
                     Log.i(TAG, "Classes: $mScheduleClasses")
 
-                    mSchoolEnd = minOf(mScheduleClasses.last().end, LocalTime.of(15, 15))
+                    mSchoolEnd = if (mScheduleClasses.isEmpty()) {
+                        LocalTime.of(15, 15)
+                    } else {
+                        minOf(mScheduleClasses.last().end, LocalTime.of(15, 15))
+                    }
                 },
                 Response.ErrorListener { error ->
                     Log.e(TAG, "Error: ${error.message}")
