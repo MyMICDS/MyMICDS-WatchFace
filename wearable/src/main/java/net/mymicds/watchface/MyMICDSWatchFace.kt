@@ -123,7 +123,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
         private var mRequestJWT: String? = null
 
-        private var mSchoolInSession = true
+        private var mSchoolToday = true
         private var mScheduleClasses = emptyList<ScheduleClass>()
         private var mSchoolEnd = LocalTime.of(15, 15)
 
@@ -297,7 +297,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: LocalTime.of(8, 0), mSchoolEnd)
 
-            if (mSchoolInSession) {
+            if (mSchoolToday) {
                 canvas.drawArc(scaleRect(bounds, SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
             }
 
@@ -325,14 +325,16 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             // Do stuff that requires schedule classes to be populated
             if (!mScheduleClasses.isEmpty()) {
-                val currentClass = mScheduleClasses.find { mNow in it.start..it.end } ?: return
-                percent = getPercent(currentClass.start, currentClass.end)
-                val classPaint = Paint(mRingPaint).apply { color = if (mAmbient) Color.LTGRAY else currentClass.color }
+                val currentClass = mScheduleClasses.find { mNow in it.start..it.end }
+                if (currentClass != null) {
+                    percent = getPercent(currentClass.start, currentClass.end)
+                    val classPaint = Paint(mRingPaint).apply { color = if (mAmbient) Color.LTGRAY else currentClass.color }
 
-                // Draw class ring, set class name.
+                    // Draw class ring, set class name.
 
-                canvas.drawArc(scaleRect(bounds, CLASS_RING_SCALE), -90f, 360 * percent, false, classPaint)
-                percentClassName = currentClass.name
+                    canvas.drawArc(scaleRect(bounds, CLASS_RING_SCALE), -90f, 360 * percent, false, classPaint)
+                    percentClassName = currentClass.name
+                }
 
                 // Draw next class text.
 
@@ -351,7 +353,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             if (!mAmbient)
                 canvas.drawText(
-                    if (mSchoolInSession) combineAndTruncate(percentClassName, "${(percent * 100).roundToInt()}%") else "No School",
+                    if (mSchoolToday) combineAndTruncate(percentClassName, "${(percent * 100).roundToInt()}%") else "No School",
                     centerX,
                     centerY - centerTextBounds.height(),
                     mSmallTextPaint
@@ -482,9 +484,9 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
                     val schedule = response.getJSONObject("schedule")
 
-                    mSchoolInSession = schedule.get("day") != JSONObject.NULL
+                    mSchoolToday = schedule.get("day") != JSONObject.NULL
 
-                    Log.d(TAG, "In session: $mSchoolInSession")
+                    Log.d(TAG, "Is there school today: $mSchoolToday")
 
                     val classesArray = schedule.getJSONArray("classes")
                     val scheduleClasses = mutableListOf<ScheduleClass>()
