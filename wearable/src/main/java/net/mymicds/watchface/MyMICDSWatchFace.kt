@@ -25,6 +25,8 @@ import com.android.volley.toolbox.Volley
 import com.google.android.gms.wearable.*
 import org.json.JSONObject
 import java.lang.ref.WeakReference
+import java.time.DayOfWeek
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
@@ -295,7 +297,8 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             // Draw school ring.
 
-            var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: LocalTime.of(8, 0), mSchoolEnd)
+            val schoolStart = LocalTime.of(if (LocalDate.now().dayOfWeek == DayOfWeek.WEDNESDAY) 9 else 8, 0)
+            var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: schoolStart, mSchoolEnd)
 
             if (mSchoolToday) {
                 canvas.drawArc(scaleRect(bounds, SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
