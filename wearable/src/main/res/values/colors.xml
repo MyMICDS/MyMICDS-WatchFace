@@ -3,4 +3,5 @@
     <color name="background">#000000</color>
     <color name="digital_text">#ffffff</color>
     <color name="school_ring">#0275d8</color>
+    <color name="tap_indicator">#20ffffff</color>
 </resources>

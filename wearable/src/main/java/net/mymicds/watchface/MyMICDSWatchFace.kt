@@ -29,6 +29,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -77,14 +78,30 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         private const val CLASS_RING_SCALE = 0.935f
 
         /**
-         * API route to make request to.
+         * Rectangle scale factor for the tap indicator circle.
+         * Calculates radius of circle as half the scaled width.
          */
-        private const val API_ROUTE = "https://api.mymicds.net/schedule/get"
+        private const val TAP_INDICATOR_SCALE = 0.5f
 
         /**
-         * Time interval to make API requests at, in milliseconds.
+         * API route to make schedule request to.
          */
-        private const val API_INTERVAL = 1 /* hour */ * 60 * 60 * 1000L
+        private const val SCHEDULE_API_ROUTE = "https://api.mymicds.net/schedule/get"
+
+        /**
+         * Time interval to make schedule API requests at, in milliseconds.
+         */
+        private const val SCHEDULE_API_INTERVAL = 1 /* hour */ * 60 * 60 * 1000L
+
+        /**
+         * API route to make lunch request to.
+         */
+        private const val LUNCH_API_ROUTE = "https://api.mymicds.net/lunch/get"
+
+        /**
+         * Time interval to make lunch API requests at, in milliseconds.
+         */
+        private const val LUNCH_API_INTERVAL = 6 /* hours */ * 60 * 60 * 1000L
 
         /**
          * Data map key that holds the user's JWT.
@@ -129,15 +146,25 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         private var mScheduleClasses = emptyList<ScheduleClass>()
         private var mSchoolEnd = LocalTime.of(15, 15)
 
+        private var mShowLunch = false
+        private var mLunchDishes = listOf("Lunch Not Available")
+
         private var mRegisteredTimeZoneReceiver = false
 
-        private var mXOffset: Float = 0F
-        private var mYOffset: Float = 0F
+        private var mXOffset = 0f
+        private var mYOffset = 0f
+
+        private var mCenterX = 0f
+        private var mCenterY = 0f
 
         private lateinit var mBackgroundPaint: Paint
         private lateinit var mTimePaint: Paint
         private lateinit var mSmallTextPaint: Paint
         private lateinit var mRingPaint: Paint
+        private lateinit var mTapIndicatorPaint: Paint
+
+        private var mShowTapIndicator = false
+        private var mTapIndicatorRadius = 0f
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -160,6 +187,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             setWatchFaceStyle(
                 WatchFaceStyle.Builder(this@MyMICDSWatchFace)
+                    .setAcceptsTapEvents(true)
                     .setHideStatusBar(true)
                     .build()
             )
@@ -187,15 +215,23 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
             mRequestQueue = Volley.newRequestQueue(this@MyMICDSWatchFace)
 
-            val addRequestRunnable = object: Runnable {
+            val scheduleRequestRunnable = object: Runnable {
                 override fun run() {
                     if (mRequestJWT != null) {
-                        makeMyMICDSRequest()
-                        mTimedRequestHandler.postDelayed(this, API_INTERVAL)
+                        makeScheduleRequest()
+                        mTimedRequestHandler.postDelayed(this, SCHEDULE_API_INTERVAL)
                     }
                 }
             }
-            mTimedRequestHandler.post(addRequestRunnable)
+            mTimedRequestHandler.post(scheduleRequestRunnable)
+
+            val lunchRequestRunnable = object: Runnable {
+                override fun run() {
+                    makeLunchRequest()
+                    mTimedRequestHandler.postDelayed(this, LUNCH_API_INTERVAL)
+                }
+            }
+            mTimedRequestHandler.post(lunchRequestRunnable)
 
             val resources = this@MyMICDSWatchFace.resources
             mYOffset = resources.getDimension(R.dimen.digital_y_offset)
@@ -226,6 +262,11 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 strokeWidth = RING_STROKE_WIDTH
                 style = Paint.Style.STROKE
                 strokeCap = Paint.Cap.ROUND
+            }
+
+            // Initializes tap indicator paint.
+            mTapIndicatorPaint = Paint().apply {
+                color = ContextCompat.getColor(applicationContext, R.color.tap_indicator)
             }
         }
 
@@ -270,42 +311,30 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             updateTimer()
         }
 
+        override fun onTapCommand(tapType: Int, x: Int, y: Int, eventTime: Long) {
+            when (tapType) {
+                WatchFaceService.TAP_TYPE_TAP -> {
+                    mShowTapIndicator = false
+                    if (withinTapRegion(x, y)) {
+                        mShowLunch = true
+                    }
+                }
+                WatchFaceService.TAP_TYPE_TOUCH -> {
+                    if (withinTapRegion(x, y)) {
+                        mShowTapIndicator = true
+                    }
+                }
+                WatchFaceService.TAP_TYPE_TOUCH_CANCEL -> mShowTapIndicator = false
+                else -> super.onTapCommand(tapType, x, y, eventTime)
+            }
+        }
+
+        private fun withinTapRegion(x: Int, y: Int): Boolean {
+            val distanceSquared = (x - mCenterX).pow(2) + (y - mCenterY).pow(2)
+            return distanceSquared <= mTapIndicatorRadius.pow(2)
+        }
+
         override fun onDraw(canvas: Canvas, bounds: Rect) {
-            // Draw the background.
-            if (mAmbient) {
-                canvas.drawColor(Color.BLACK)
-            } else {
-                canvas.drawRect(
-                    0f, 0f, bounds.width().toFloat(), bounds.height().toFloat(), mBackgroundPaint
-                )
-            }
-
-            val centerX = bounds.exactCenterX()
-            val centerY = bounds.exactCenterY()
-
-            // Draw time.
-
-            mNow = LocalTime.now()
-
-            val timeFormat = DateTimeFormatter.ofPattern("h:mm")
-
-            val timeText = timeFormat.format(mNow)
-            val centerTextBounds = Rect().also { mTimePaint.getTextBounds(timeText, 0, 1, it) }
-            val centerTextYOffset = centerTextBounds.exactCenterY()
-
-            canvas.drawText(timeText, centerX, centerY - centerTextYOffset, mTimePaint)
-
-            // Draw school ring.
-
-            val schoolStart = LocalTime.of(if (LocalDate.now().dayOfWeek == DayOfWeek.WEDNESDAY) 9 else 8, 0)
-            var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: schoolStart, mSchoolEnd)
-
-            if (mSchoolToday) {
-                canvas.drawArc(scaleRect(bounds, SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
-            }
-
-            // Draw percent text.
-
             /**
              * Combines two strings together with a colon and truncates the first string if the overall text is too large.
              */
@@ -322,6 +351,48 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 }
             }
 
+            mNow = LocalTime.now()
+
+            val timeFormat = DateTimeFormatter.ofPattern("h:mm")
+            val timeText = timeFormat.format(mNow)
+            val centerTextBounds = Rect().also { mTimePaint.getTextBounds(timeText, 0, 1, it) }
+            val centerTextYOffset = centerTextBounds.exactCenterY()
+
+            mCenterX = bounds.exactCenterX()
+            mCenterY = bounds.exactCenterY()
+
+            // Draw the background.
+            if (mAmbient) {
+                canvas.drawColor(Color.BLACK)
+            } else {
+                canvas.drawRect(
+                    0f, 0f, bounds.width().toFloat(), bounds.height().toFloat(), mBackgroundPaint
+                )
+            }
+            // Draw tap indicator.
+            if (mShowTapIndicator) {
+                mTapIndicatorRadius = bounds.scale(TAP_INDICATOR_SCALE).width() / 2
+                canvas.drawCircle(mCenterX, mCenterY, mTapIndicatorRadius, mTapIndicatorPaint)
+            }
+
+            if (!mShowLunch) {
+                // Draw time.
+                canvas.drawText(timeText, mCenterX, mCenterY - centerTextYOffset, mTimePaint)
+            } else {
+                // TODO: Draw lunch text.
+            }
+
+            // Draw school ring.
+
+            val schoolStart = LocalTime.of(if (LocalDate.now().dayOfWeek == DayOfWeek.WEDNESDAY) 9 else 8, 0)
+            var percent = getPercent(mScheduleClasses.firstOrNull()?.start ?: schoolStart, mSchoolEnd)
+
+            if (mSchoolToday) {
+                canvas.drawArc(bounds.scale(SCHOOL_RING_SCALE), -90f, 360 * percent, false, mRingPaint)
+            }
+
+            // Draw percent text.
+
             val percentTextYOffset = Rect().also { mSmallTextPaint.getTextBounds("1", 0, 1, it) }.exactCenterY() * 2
 
             var percentClassName = "School"
@@ -335,46 +406,51 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
 
                     // Draw class ring, set class name.
 
-                    canvas.drawArc(scaleRect(bounds, CLASS_RING_SCALE), -90f, 360 * percent, false, classPaint)
+                    canvas.drawArc(bounds.scale(CLASS_RING_SCALE), -90f, 360 * percent, false, classPaint)
                     percentClassName = currentClass.name
                 }
 
                 // Draw next class text.
 
-                val nextClass = mScheduleClasses.firstOrNull { mNow < it.start && it.name != "Break" }
-                if (nextClass != null && !mAmbient) {
-                    canvas.drawText(
-                        combineAndTruncate(nextClass.name, timeFormat.format(nextClass.start)),
-                        centerX,
-                        centerY + centerTextBounds.height() - percentTextYOffset,
-                        mSmallTextPaint
-                    )
+                if (!mShowLunch) {
+                    val nextClass = mScheduleClasses.firstOrNull { mNow < it.start && it.name != "Break" }
+                    if (nextClass != null && !mAmbient) {
+                        canvas.drawText(
+                            combineAndTruncate(nextClass.name, timeFormat.format(nextClass.start)),
+                            mCenterX,
+                            mCenterY + centerTextBounds.height() - percentTextYOffset,
+                            mSmallTextPaint
+                        )
+                    }
                 }
             }
 
             // Draw class percent text.
-
-            if (!mAmbient)
+            if (!mAmbient && !mShowLunch) {
                 canvas.drawText(
-                    if (mSchoolToday) combineAndTruncate(percentClassName, "${(percent * 100).roundToInt()}%") else "No School",
-                    centerX,
-                    centerY - centerTextBounds.height(),
+                    if (mSchoolToday) combineAndTruncate(
+                        percentClassName,
+                        "${(percent * 100).roundToInt()}%"
+                    ) else "No School",
+                    mCenterX,
+                    mCenterY - centerTextBounds.height(),
                     mSmallTextPaint
                 )
+            }
         }
 
         /**
          * Scales a rectangle evenly on all sides.
          */
-        private fun scaleRect(rect: Rect, scaleFactor: Float): RectF {
-            val deltaX = rect.width() * (1 - scaleFactor)
-            val deltaY = rect.height() * (1 - scaleFactor)
+        private fun Rect.scale(scaleFactor: Float): RectF {
+            val deltaX = width() * (1 - scaleFactor)
+            val deltaY = height() * (1 - scaleFactor)
 
             return RectF(
-                rect.left + deltaX,
-                rect.top + deltaY,
-                rect.right - deltaX,
-                rect.bottom - deltaY
+                left + deltaX,
+                top + deltaY,
+                right - deltaX,
+                bottom - deltaY
             )
         }
 
@@ -475,12 +551,12 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             }
         }
 
-        private fun makeMyMICDSRequest() {
-            Log.d(TAG, "Making request")
+        private fun makeScheduleRequest() {
+            Log.d(TAG, "Making schedule request")
 
             val jsonRequest = object: JsonObjectRequest(
                 Request.Method.POST,
-                API_ROUTE,
+                SCHEDULE_API_ROUTE,
                 null,
                 Response.Listener { response ->
                     Log.i(TAG, "Response: $response")
@@ -530,6 +606,38 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             mRequestQueue.add(jsonRequest)
         }
 
+        private fun makeLunchRequest() {
+            Log.d(TAG, "Making lunch request")
+
+            val jsonRequest = JsonObjectRequest(
+                Request.Method.POST,
+                LUNCH_API_ROUTE,
+                null,
+                Response.Listener { response ->
+                    val lunch = response.getJSONObject("lunch")
+
+                    // TODO: Maybe make user request to get the correct school?
+                    val todaysLunch = lunch
+                        .getJSONObject(LocalDate.now().toString())
+                        .getJSONObject("upperschool")
+                        .getJSONObject("categories")
+                        .getJSONArray("Main Dish")
+                    val dishes = mutableListOf<String>()
+
+                    for (i in 0 until todaysLunch.length()) {
+                        dishes.add(todaysLunch.getString(i))
+                    }
+
+                    mLunchDishes = dishes.toList()
+                },
+                Response.ErrorListener { error ->
+                    Log.e(TAG, "Error: ${error.message}")
+                }
+            )
+
+            mRequestQueue.add(jsonRequest)
+        }
+
         override fun onDataChanged(dataEvents: DataEventBuffer) {
             Log.d(TAG, "Data change listener called")
             for (event in dataEvents) {
@@ -543,7 +651,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             val dataMap = DataMapItem.fromDataItem(dataItem).dataMap
             mRequestJWT = dataMap.getString(JWT_KEY)
             Log.i(TAG, "JWT: $mRequestJWT")
-            makeMyMICDSRequest()
+            makeScheduleRequest()
         }
     }
 }
