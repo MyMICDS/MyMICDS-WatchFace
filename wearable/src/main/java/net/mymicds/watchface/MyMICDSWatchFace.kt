@@ -14,6 +14,10 @@ import android.support.v4.math.MathUtils
 import android.support.wearable.watchface.CanvasWatchFaceService
 import android.support.wearable.watchface.WatchFaceService
 import android.support.wearable.watchface.WatchFaceStyle
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.text.TextUtils
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.WindowInsets
@@ -78,10 +82,9 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         private const val CLASS_RING_SCALE = 0.935f
 
         /**
-         * Rectangle scale factor for the tap indicator circle.
-         * Calculates radius of circle as half the scaled width.
+         * Rectangle scale factor for the central information area.
          */
-        private const val TAP_INDICATOR_SCALE = 0.5f
+        private const val CENTRAL_INFO_SCALE = 0.75f
 
         /**
          * API route to make schedule request to.
@@ -102,6 +105,11 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
          * Time interval to make lunch API requests at, in milliseconds.
          */
         private const val LUNCH_API_INTERVAL = 6 /* hours */ * 60 * 60 * 1000L
+
+        /**
+         * Maximum amount of lines to use for lunch text.
+         */
+        private const val LUNCH_TEXT_MAX_LINES = 5
 
         /**
          * Data map key that holds the user's JWT.
@@ -158,8 +166,8 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
         private var mCenterY = 0f
 
         private lateinit var mBackgroundPaint: Paint
-        private lateinit var mTimePaint: Paint
-        private lateinit var mSmallTextPaint: Paint
+        private lateinit var mTimePaint: TextPaint
+        private lateinit var mSmallTextPaint: TextPaint
         private lateinit var mRingPaint: Paint
         private lateinit var mTapIndicatorPaint: Paint
 
@@ -242,7 +250,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             }
 
             // Initializes time paint.
-            mTimePaint = Paint().apply {
+            mTimePaint = TextPaint().apply {
                 typeface = NORMAL_TYPEFACE
                 isAntiAlias = true
                 color = ContextCompat.getColor(applicationContext, R.color.digital_text)
@@ -250,8 +258,8 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 textSize = resources.getDimension(R.dimen.digital_text_size)
             }
 
-            // Initializes percent text paint.
-            mSmallTextPaint = Paint(mTimePaint).apply {
+            // Initializes small text paint.
+            mSmallTextPaint = TextPaint(mTimePaint).apply {
                 textSize = resources.getDimension(R.dimen.digital_text_size_small)
             }
 
@@ -311,12 +319,12 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             updateTimer()
         }
 
-        override fun onTapCommand(tapType: Int, x: Int, y: Int, eventTime: Long) {
+        override fun onTapCommand(@TapType tapType: Int, x: Int, y: Int, eventTime: Long) {
             when (tapType) {
                 WatchFaceService.TAP_TYPE_TAP -> {
                     mShowTapIndicator = false
                     if (withinTapRegion(x, y)) {
-                        mShowLunch = true
+                        mShowLunch = !mShowLunch
                     }
                 }
                 WatchFaceService.TAP_TYPE_TOUCH -> {
@@ -342,7 +350,7 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                 val text = "$text1: $text2"
                 val boundingBox = Rect().also { mSmallTextPaint.getTextBounds(text, 0, text.length, it) }
 
-                Log.d(TAG, "Width ratio for \"$text1\": ${boundingBox.width().toDouble() / bounds.width()}")
+                // Log.d(TAG, "Width ratio for \"$text1\": ${boundingBox.width().toDouble() / bounds.width()}")
 
                 return if (boundingBox.width() >= 0.7 * bounds.width()) {
                     "${text1.substring(0..8)}…: $text2"
@@ -361,6 +369,9 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
             mCenterX = bounds.exactCenterX()
             mCenterY = bounds.exactCenterY()
 
+            val centralWidth = bounds.scale(CENTRAL_INFO_SCALE).width()
+            mTapIndicatorRadius = centralWidth / 2
+
             // Draw the background.
             if (mAmbient) {
                 canvas.drawColor(Color.BLACK)
@@ -369,17 +380,32 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                     0f, 0f, bounds.width().toFloat(), bounds.height().toFloat(), mBackgroundPaint
                 )
             }
-            // Draw tap indicator.
-            if (mShowTapIndicator) {
-                mTapIndicatorRadius = bounds.scale(TAP_INDICATOR_SCALE).width() / 2
-                canvas.drawCircle(mCenterX, mCenterY, mTapIndicatorRadius, mTapIndicatorPaint)
-            }
 
             if (!mShowLunch) {
                 // Draw time.
                 canvas.drawText(timeText, mCenterX, mCenterY - centerTextYOffset, mTimePaint)
             } else {
-                // TODO: Draw lunch text.
+                // Draw lunch dishes.
+                val allDishes = mLunchDishes.joinToString("\n")
+                val layout = StaticLayout.Builder
+                    .obtain(
+                        allDishes,
+                        0,
+                        allDishes.length,
+                        mSmallTextPaint,
+                        centralWidth.toInt()
+                    )
+                    .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                    .setMaxLines(LUNCH_TEXT_MAX_LINES)
+                    .setEllipsize(TextUtils.TruncateAt.END)
+                    .build()
+
+                // TODO: Figure out what the hell is going on with the layout drawing thing
+
+                canvas.save()
+                canvas.translate(mCenterX - (layout.width / 2), mCenterY - (layout.height / 2))
+                layout.draw(canvas)
+                canvas.restore()
             }
 
             // Draw school ring.
@@ -436,6 +462,11 @@ class MyMICDSWatchFace : CanvasWatchFaceService() {
                     mCenterY - centerTextBounds.height(),
                     mSmallTextPaint
                 )
+            }
+
+            // Draw tap indicator.
+            if (mShowTapIndicator) {
+                canvas.drawCircle(mCenterX, mCenterY, mTapIndicatorRadius, mTapIndicatorPaint)
             }
         }
 
